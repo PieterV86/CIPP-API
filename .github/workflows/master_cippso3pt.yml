@@ -1,6 +1,6 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/azure/functions-action
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
+# Deploy CIPP-API (PowerShell) to the Azure Function App 'cippso3pt' (Flex Consumption).
+# Uses the Flex One Deploy publish endpoint directly + explicit status verification,
+# because Azure/functions-action@v1 reports a false failure on its post-deploy check on Flex.
 name: Build and deploy Powershell project to Azure Function App - cippso3pt
 
 on:
@@ -9,20 +9,17 @@ on:
       - master
   workflow_dispatch:
 
-env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.' # set this to the path to your web app project, defaults to the repository root
-
 jobs:
   deploy:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write   # required for OIDC login
+      contents: read
 
     steps:
-      - name: 'Checkout GitHub Action'
+      - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -30,11 +27,41 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E7218C8E660B44A89881EE40AC462C05 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_AA38F4C6594142E796DC15108E72B5A6 }}
 
-      - name: 'Run Azure Functions Action'
-        uses: Azure/functions-action@v1
-        id: fa
-        with:
-          app-name: 'cippso3pt'
-          slot-name: 'Production'
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-          
+      - name: Deploy to Flex Consumption (One Deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=cippso3pt
+          SCM="https://${APP}.scm.azurewebsites.net"
+
+          echo "Packaging repository..."
+          zip -r -q package.zip . -x '.git/*' '.github/*'
+          echo "Package size: $(du -h package.zip | cut -f1)"
+
+          TOKEN=$(az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv)
+
+          echo "Publishing to Flex One Deploy endpoint..."
+          HTTP=$(curl -s -X POST "${SCM}/api/publish?type=zip&RemoteBuild=false" \
+            -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/zip" \
+            --data-binary @package.zip -o resp.txt -w "%{http_code}" --max-time 300)
+          echo "Publish HTTP status: ${HTTP}"
+          if [ "${HTTP}" != "202" ] && [ "${HTTP}" != "200" ]; then
+            echo "Publish failed:"; cat resp.txt; exit 1
+          fi
+
+          echo "Polling deployment status..."
+          STATUS=""
+          for i in $(seq 1 30); do
+            R=$(curl -s "${SCM}/api/deployments/latest" -H "Authorization: Bearer ${TOKEN}" --max-time 30)
+            STATUS=$(echo "${R}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('status'))")
+            COMPLETE=$(echo "${R}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('complete'))")
+            echo "  attempt ${i}: status=${STATUS} complete=${COMPLETE}"
+            [ "${COMPLETE}" = "True" ] && break
+            sleep 15
+          done
+
+          # Kudu deployment status: 4 = success, 3 = failed
+          if [ "${STATUS}" != "4" ]; then
+            echo "Deployment did not complete successfully (status=${STATUS})."; exit 1
+          fi
+          echo "Deployment succeeded."
