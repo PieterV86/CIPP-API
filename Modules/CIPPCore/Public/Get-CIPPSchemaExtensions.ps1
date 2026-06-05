@@ -6,9 +6,7 @@ function Get-CIPPSchemaExtensions {
     )
 
     # Get definitions file
-    $CIPPCore = Get-Module -Name 'CIPPCore' | Select-Object -ExpandProperty ModuleBase
-    $CIPPRoot = (Get-Item -Path $CIPPCore).Parent.Parent
-    $SchemaDefinitionsPath = Join-Path $CIPPRoot 'Config\schemaDefinitions.json'
+    $SchemaDefinitionsPath = Join-Path $env:CIPPRootPath 'Config\schemaDefinitions.json'
 
     # check CustomData table for schema extensions
     $CustomDataTable = Get-CippTable -tablename 'CustomData'
@@ -34,7 +32,7 @@ function Get-CIPPSchemaExtensions {
         $SchemaExtensions = Get-CIPPAzDataTableEntity @CustomDataTable -Filter "PartitionKey eq 'SchemaExtension'"
     }
 
-    $Schemas = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/schemaExtensions?`$filter=owner eq '$($ENV:ApplicationID)'" -NoAuthCheck $true -AsApp $true | Where-Object { $_.status -ne 'Deprecated' }
+    $Schemas = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/schemaExtensions?`$filter=owner eq '$($env:ApplicationID)'" -NoAuthCheck $true -AsApp $true | Where-Object { $_.status -ne 'Deprecated' }
 
     foreach ($SchemaExtension in $SchemaExtensions) {
         $SchemaFound = $false
